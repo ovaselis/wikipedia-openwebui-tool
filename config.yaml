@@ -1,0 +1,4 @@
+tool_description: >
+  Wikipedia Search Tool for Open WebUI. This tool searches English and Latvian
+  Wikipedia and returns full article text with title, URL, page ID, language,
+  content, and content length.
