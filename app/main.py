@@ -14,14 +14,17 @@ from langdetect.lang_detect_exception import LangDetectException
 
 
 CONFIG_PATH = Path("config.yaml")
+
+#supported Wikipedia languages
 SUPPORTED_LANGUAGES = {"en", "lv"}
 
+#runtime settings from env
 WIKIPEDIA_LANGUAGE = os.getenv("WIKIPEDIA_LANGUAGE", "en")
 WIKIPEDIA_DEFAULT_COUNT = int(os.getenv("WIKIPEDIA_DEFAULT_COUNT", "3"))
 WIKIPEDIA_BEARER_TOKEN = os.getenv("WIKIPEDIA_BEARER_TOKEN")
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "20"))
 
-
+#loads metadata from config.yaml
 def load_config() -> dict:
     if CONFIG_PATH.exists():
         with CONFIG_PATH.open("r", encoding="utf-8") as file:
@@ -31,7 +34,7 @@ def load_config() -> dict:
 
 config = load_config()
 
-
+#creates a FastAPI app
 app = FastAPI(
     title="Wikipedia Search Tool for Open WebUI",
     description=config.get(
@@ -41,10 +44,11 @@ app = FastAPI(
     version="0.2.0",
 )
 
-
+#JSON request model for POST /search.
 class SearchRequest(BaseModel):
     query: str = Field(..., description="Wikipedia search query.")
 
+    #limits the returned article count
     count: int = Field(
         default=WIKIPEDIA_DEFAULT_COUNT,
         ge=1,
@@ -58,6 +62,7 @@ class SearchRequest(BaseModel):
     )
 
 
+#optional bearer token check.
 def check_auth(authorization: Optional[str]) -> None:
     if not WIKIPEDIA_BEARER_TOKEN:
         return
@@ -66,6 +71,7 @@ def check_auth(authorization: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
 
 
+#cleans text and removes artifacts like html code
 def clean_text(text: str | None) -> str:
     if not text:
         return ""
@@ -76,7 +82,7 @@ def clean_text(text: str | None) -> str:
 
     return text.strip()
 
-
+#if language is not provided it tries to detect it
 def detect_language(query: str) -> str:
     try:
         detected = detect(query)
@@ -89,7 +95,7 @@ def detect_language(query: str) -> str:
 
     return WIKIPEDIA_LANGUAGE
 
-
+#uses provided language or detects it
 def resolve_language(query: str, language: Optional[str]) -> str:
     resolved_language = language or detect_language(query)
 
@@ -102,9 +108,10 @@ def resolve_language(query: str, language: Optional[str]) -> str:
     return resolved_language
 
 
+#creates HTTP headers for requests to Wikipedia
 def wikipedia_headers(language: str) -> dict:
     accept_language = (
-        "lv-LV,lv;q=0.9,en;q=0.8"
+        "lv-LV,lv;q=0.9,en;q=0.8" #if we search latvian Wikipedia, prefer latvian, else english
         if language == "lv"
         else "en-US,en;q=0.9"
     )
@@ -115,7 +122,7 @@ def wikipedia_headers(language: str) -> dict:
         "Accept-Language": accept_language,
     }
 
-
+#searches wikipedia and returns raw search results with page IDs
 async def search_wikipedia_api(query: str, count: int, language: str) -> dict:
     api_url = f"https://{language}.wikipedia.org/w/api.php"
 
@@ -129,6 +136,7 @@ async def search_wikipedia_api(query: str, count: int, language: str) -> dict:
     }
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        #sends GET request to wikipedia
         response = await client.get(
             api_url,
             params=params,
@@ -137,7 +145,7 @@ async def search_wikipedia_api(query: str, count: int, language: str) -> dict:
         response.raise_for_status()
         return response.json()
 
-
+#fetches full article text for the returned page IDs
 async def get_full_page_content(page_ids: list[int], language: str) -> dict:
     if not page_ids:
         return {}
@@ -174,7 +182,7 @@ async def get_full_page_content(page_ids: list[int], language: str) -> dict:
 
     return results
 
-
+#combines search metadata with full article text.
 async def format_results(data: dict, query: str, language: str) -> dict:
     search_data = data.get("query", {}).get("search", [])
 
@@ -243,6 +251,7 @@ async def search(
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
+    #tries to resolve the language else tries detecting
     language = resolve_language(query=query, language=request.language)
 
     try:
@@ -270,21 +279,3 @@ async def search(
             detail=f"Wikipedia API request failed: {str(exc)}",
         )
 
-
-@app.post("/search/raw")
-async def search_raw(
-    query: str = Form(...),
-    count: int = Form(default=WIKIPEDIA_DEFAULT_COUNT),
-    language: Optional[str] = Form(default=None),
-    authorization: Optional[str] = Header(default=None),
-):
-    request = SearchRequest(
-        query=query,
-        count=count,
-        language=language,
-    )
-
-    return await search(
-        request=request,
-        authorization=authorization,
-    )
